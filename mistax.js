@@ -1,1179 +1,1763 @@
 (() => {
-    "use strict";
+"use strict";
 
-    /* =====================================
-       MISTAX MINI STORE V2
-       Floating Extension Manager
-    ===================================== */
+/* =========================================
+   MISTAX V3 - PREMIUM FLOATING STORE
+========================================= */
 
-    const APP_ID = "mistax-floating-store";
-    const DB_NAME = "MistaXStore";
-    const DB_VERSION = 1;
+const APP_ID = "mistax-floating-v3";
+const DB_NAME = "MistaXStore";
+const DB_VERSION = 1;
 
-    // Already loaded
-    if (document.getElementById(APP_ID)) {
-        const existing = document.getElementById(APP_ID);
+const OLD = document.getElementById(APP_ID);
+if (OLD) OLD.remove();
 
-        existing.shadowRoot
-            ?.getElementById("mx-panel")
-            ?.classList.toggle("hidden");
+/* =========================================
+   DATABASE
+========================================= */
 
-        return;
-    }
+let db;
 
-    /* =====================================
-       DATABASE
-    ===================================== */
+function openDB() {
+    return new Promise((resolve, reject) => {
+        const r = indexedDB.open(DB_NAME, DB_VERSION);
 
-    let db;
+        r.onupgradeneeded = () => {
+            if (!r.result.objectStoreNames.contains("extensions")) {
+                r.result.createObjectStore("extensions", {
+                    keyPath: "id"
+                });
+            }
+        };
 
-    function openDatabase() {
-        return new Promise((resolve, reject) => {
-
-            const request = indexedDB.open(
-                DB_NAME,
-                DB_VERSION
-            );
-
-            request.onupgradeneeded = () => {
-                const database = request.result;
-
-                if (!database.objectStoreNames.contains("extensions")) {
-                    database.createObjectStore("extensions", {
-                        keyPath: "id"
-                    });
-                }
-            };
-
-            request.onsuccess = () => {
-                resolve(request.result);
-            };
-
-            request.onerror = () => {
-                reject(request.error);
-            };
-
-        });
-    }
-
-    function getAll() {
-        return new Promise((resolve, reject) => {
-
-            const request = db
-                .transaction("extensions")
-                .objectStore("extensions")
-                .getAll();
-
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-
-        });
-    }
-
-    function getExtension(id) {
-        return new Promise((resolve, reject) => {
-
-            const request = db
-                .transaction("extensions")
-                .objectStore("extensions")
-                .get(id);
-
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-
-        });
-    }
-
-    function saveExtension(data) {
-        return new Promise((resolve, reject) => {
-
-            const request = db
-                .transaction("extensions", "readwrite")
-                .objectStore("extensions")
-                .put(data);
-
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
-
-        });
-    }
-
-    function deleteExtension(id) {
-        return new Promise((resolve, reject) => {
-
-            const request = db
-                .transaction("extensions", "readwrite")
-                .objectStore("extensions")
-                .delete(id);
-
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
-
-        });
-    }
-
-    /* =====================================
-       HOST + SHADOW DOM
-    ===================================== */
-
-    const host = document.createElement("div");
-
-    host.id = APP_ID;
-
-    host.style.cssText = `
-        position:fixed;
-        inset:0;
-        z-index:2147483647;
-        pointer-events:none;
-    `;
-
-    const shadow = host.attachShadow({
-        mode: "open"
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
     });
+}
+
+function dbRequest(request) {
+    return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+function getAll() {
+    return dbRequest(
+        db.transaction("extensions")
+        .objectStore("extensions")
+        .getAll()
+    );
+}
+
+function getItem(id) {
+    return dbRequest(
+        db.transaction("extensions")
+        .objectStore("extensions")
+        .get(id)
+    );
+}
+
+function saveItem(item) {
+    return dbRequest(
+        db.transaction("extensions", "readwrite")
+        .objectStore("extensions")
+        .put(item)
+    );
+}
+
+function deleteItem(id) {
+    return dbRequest(
+        db.transaction("extensions", "readwrite")
+        .objectStore("extensions")
+        .delete(id)
+    );
+}
+
+/* =========================================
+   LOCAL POSITION STORAGE
+========================================= */
 
-    shadow.innerHTML = `
+const POSITION_KEY = "mistax_v3_bubble_position";
+
+function loadPosition() {
+    try {
+        return JSON.parse(localStorage.getItem(POSITION_KEY)) || null;
+    } catch {
+        return null;
+    }
+}
 
-        <style>
+function savePosition(x, y) {
+    localStorage.setItem(
+        POSITION_KEY,
+        JSON.stringify({ x, y })
+    );
+}
 
-            * {
-                box-sizing:border-box;
-            }
+/* =========================================
+   HOST
+========================================= */
 
-            .hidden {
-                display:none !important;
-            }
+const host = document.createElement("div");
 
-            button,input,textarea {
-                font:inherit;
-            }
+host.id = APP_ID;
 
-            #mx-bubble {
-                position:fixed;
-                right:18px;
-                bottom:85px;
+host.style.cssText = `
+    position:fixed;
+    inset:0;
+    z-index:2147483647;
+    pointer-events:none;
+`;
 
-                width:54px;
-                height:54px;
+const shadow = host.attachShadow({ mode: "open" });
 
-                border-radius:50%;
-                border:none;
+shadow.innerHTML = `
 
-                background:#4169e1;
-                color:white;
+<style>
 
-                font-size:23px;
-                font-weight:bold;
+* {
+    box-sizing:border-box;
+}
 
-                box-shadow:0 5px 20px #0007;
+button,input,textarea {
+    font:inherit;
+}
 
-                cursor:pointer;
-                pointer-events:auto;
+.hidden {
+    display:none !important;
+}
 
-                display:flex;
-                align-items:center;
-                justify-content:center;
+/* FLOATING BUBBLE */
 
-                touch-action:none;
-            }
+#bubble {
+    position:fixed;
+    width:58px;
+    height:58px;
 
-            #mx-panel {
-                position:fixed;
+    border:2px solid #ffffff30;
+    border-radius:20px;
 
-                right:12px;
-                bottom:150px;
+    background:linear-gradient(145deg,#7665ff,#4266ed);
 
-                width:min(350px,calc(100vw - 24px));
+    color:white;
+    font-size:25px;
 
-                max-height:70vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
 
-                display:flex;
-                flex-direction:column;
+    box-shadow:0 8px 30px #465fff70;
 
-                background:#101522;
-                color:#fff;
+    cursor:grab;
+    user-select:none;
+    -webkit-user-select:none;
 
-                border:1px solid #34415b;
-                border-radius:17px;
+    touch-action:none;
+    pointer-events:auto;
 
-                overflow:hidden;
+    transition:box-shadow .2s;
+}
 
-                box-shadow:0 12px 40px #0009;
+#bubble:active {
+    cursor:grabbing;
+    box-shadow:0 5px 18px #465fff90;
+}
 
-                font:14px Arial,sans-serif;
+/* MAIN PANEL */
 
-                pointer-events:auto;
-            }
+#panel {
+    position:fixed;
 
-            #mx-header {
-                padding:14px;
+    width:min(390px,calc(100vw - 22px));
+    height:min(650px,calc(100dvh - 35px));
 
-                background:#1d293d;
+    display:flex;
+    flex-direction:column;
 
-                display:flex;
-                align-items:center;
-                justify-content:space-between;
+    background:#101525;
 
-                cursor:move;
-                touch-action:none;
+    border:1px solid #394663;
+    border-radius:22px;
 
-                user-select:none;
-            }
+    overflow:hidden;
 
-            #mx-title {
-                font-size:17px;
-                font-weight:bold;
-            }
+    color:#f5f7ff;
 
-            .mx-header-actions {
-                display:flex;
-                gap:5px;
-            }
+    box-shadow:0 20px 70px #000b;
 
-            .mx-header-btn {
-                border:0;
-                border-radius:8px;
-
-                background:#39465d;
-                color:white;
-
-                width:34px;
-                height:32px;
-
-                font-size:18px;
-            }
-
-            #mx-content {
-                padding:12px;
-                overflow-y:auto;
-                overscroll-behavior:contain;
-            }
-
-            .mx-subtitle {
-                font-size:11px;
-                color:#9caac1;
-                margin:0 0 12px;
-            }
-
-            .mx-card {
-                background:#1d293d;
-                border-radius:12px;
-                padding:12px;
-                margin-bottom:12px;
-            }
-
-            .mx-card h3 {
-                margin:0 0 10px;
-                font-size:15px;
-            }
-
-            .mx-input {
-                width:100%;
-                padding:11px;
-
-                margin:5px 0 9px;
-
-                background:#101827;
-                color:white;
-
-                border:1px solid #46536b;
-                border-radius:8px;
-
-                outline:none;
-            }
-
-            .mx-input:focus {
-                border-color:#4169e1;
-            }
-
-            #mx-code {
-                height:115px;
-                resize:vertical;
-                font-family:monospace;
-                font-size:12px;
-            }
-
-            .mx-btn {
-                padding:9px 12px;
-
-                border:0;
-                border-radius:8px;
-
-                background:#4169e1;
-                color:white;
-
-                margin:3px;
+    pointer-events:auto;
 
-                font-size:12px;
-                font-weight:bold;
-            }
+    font-family:system-ui,-apple-system,sans-serif;
+}
 
-            .mx-secondary {
-                background:#39465d;
-            }
+/* HEADER */
 
-            .mx-danger {
-                background:#c0392b;
-            }
+.header {
+    padding:17px;
 
-            .mx-item {
-                background:#28364c;
-                padding:11px;
-                border-radius:10px;
-                margin:9px 0;
-            }
+    background:
+        radial-gradient(circle at 90% 0%,#5268ff55,transparent 45%),
+        linear-gradient(130deg,#202c4b,#182139);
 
-            .mx-item-title {
-                font-weight:bold;
-                font-size:14px;
-                overflow-wrap:anywhere;
-            }
+    border-bottom:1px solid #ffffff12;
 
-            .mx-description {
-                color:#aab7ca;
-                font-size:11px;
-                margin-top:5px;
-                overflow-wrap:anywhere;
-            }
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
 
-            .mx-status {
-                font-size:10px;
-                margin-top:7px;
-                color:#8fd6a5;
-            }
+    touch-action:none;
+    user-select:none;
+    -webkit-user-select:none;
 
-            .mx-status.off {
-                color:#aab7ca;
-            }
+    cursor:grab;
+}
 
-            .mx-actions {
-                display:flex;
-                flex-wrap:wrap;
-                margin-top:8px;
-            }
+.brand {
+    display:flex;
+    align-items:center;
+    gap:11px;
+}
 
-            .mx-empty {
-                color:#aab7ca;
-                font-size:12px;
-                padding:10px 0;
-            }
+.logo {
+    width:42px;
+    height:42px;
 
-            .mx-footer {
-                text-align:center;
-                color:#8593aa;
-                font-size:10px;
-                padding:5px;
-            }
+    display:flex;
+    align-items:center;
+    justify-content:center;
 
-            #mx-toast {
-                position:fixed;
-                left:50%;
-                bottom:25px;
+    border-radius:14px;
 
-                transform:translateX(-50%);
+    background:linear-gradient(145deg,#8876ff,#4668ff);
 
-                background:#293b59;
-                color:white;
+    font-size:23px;
 
-                padding:11px 16px;
-                border-radius:10px;
+    box-shadow:0 5px 18px #5065ff55;
+}
 
-                font-size:12px;
+.brand-name {
+    font-size:18px;
+    font-weight:800;
+    letter-spacing:.3px;
+}
 
-                box-shadow:0 5px 20px #0008;
+.brand-sub {
+    color:#9ba9c7;
+    font-size:10px;
+    margin-top:3px;
+}
 
-                display:none;
-                pointer-events:none;
-            }
+.header-actions {
+    display:flex;
+    gap:6px;
+}
 
-        </style>
+.icon-btn {
+    width:35px;
+    height:35px;
 
-        <button id="mx-bubble" title="Open MistaX">
-            ✦
-        </button>
+    border:0;
+    border-radius:10px;
 
-        <div id="mx-panel" class="hidden">
+    background:#ffffff13;
+    color:white;
 
-            <div id="mx-header">
+    font-size:19px;
+}
 
-                <div id="mx-title">
-                    ✦ MistaX Store
-                </div>
+/* CONTENT */
 
-                <div class="mx-header-actions">
+.content {
+    flex:1;
+    min-height:0;
+    overflow-y:auto;
+    padding:14px;
 
-                    <button class="mx-header-btn" id="mx-minimize">
-                        −
-                    </button>
+    overscroll-behavior:contain;
+    scrollbar-width:thin;
+    scrollbar-color:#44547a transparent;
+}
 
-                    <button class="mx-header-btn" id="mx-close">
-                        ×
-                    </button>
+.hero {
+    padding:17px;
+    border-radius:16px;
 
-                </div>
+    background:
+        radial-gradient(circle at 100% 0%,#586aff44,transparent 45%),
+        linear-gradient(135deg,#28395c,#1d2942);
 
+    margin-bottom:14px;
+
+    border:1px solid #ffffff12;
+}
+
+.hero-title {
+    font-size:17px;
+    font-weight:750;
+}
+
+.hero-description {
+    color:#a9b7d1;
+    font-size:11px;
+    line-height:1.6;
+    margin-top:5px;
+}
+
+.stats {
+    display:flex;
+    gap:9px;
+    margin-top:15px;
+}
+
+.stat {
+    flex:1;
+    padding:10px;
+    background:#ffffff0c;
+    border-radius:11px;
+}
+
+.stat strong {
+    display:block;
+    font-size:19px;
+}
+
+.stat span {
+    color:#aab6d0;
+    font-size:10px;
+}
+
+/* CARDS */
+
+.card {
+    background:#1b263c;
+
+    border:1px solid #ffffff0c;
+
+    border-radius:15px;
+
+    padding:14px;
+
+    margin-bottom:13px;
+}
+
+.card-heading {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+
+    margin-bottom:12px;
+}
+
+.card-heading h3 {
+    font-size:14px;
+    margin:0;
+    font-weight:750;
+}
+
+.badge {
+    background:#3c4c77;
+    color:#c6d1ff;
+
+    border-radius:20px;
+
+    padding:5px 9px;
+
+    font-size:10px;
+}
+
+/* INPUTS */
+
+.input {
+    display:block;
+    width:100%;
+
+    padding:12px;
+
+    margin-bottom:9px;
+
+    border:1px solid #394760;
+    border-radius:10px;
+
+    outline:none;
+
+    background:#111a2b;
+    color:white;
+
+    font-size:13px;
+}
+
+.input:focus {
+    border-color:#7180ff;
+    box-shadow:0 0 0 2px #7180ff22;
+}
+
+textarea.input {
+    height:130px;
+    resize:vertical;
+    font-family:monospace;
+    line-height:1.6;
+}
+
+.input::placeholder {
+    color:#7887a3;
+}
+
+/* BUTTONS */
+
+.btn {
+    padding:10px 13px;
+
+    border:0;
+    border-radius:10px;
+
+    background:linear-gradient(135deg,#6e6bff,#4269ec);
+
+    color:white;
+
+    font-size:11px;
+    font-weight:750;
+
+    cursor:pointer;
+}
+
+.btn-secondary {
+    background:#34425e;
+}
+
+.btn-danger {
+    background:#9d354c;
+}
+
+.btn-full {
+    width:100%;
+}
+
+.btn:active {
+    transform:scale(.97);
+}
+
+/* SEARCH */
+
+.search-wrap {
+    position:relative;
+    margin-bottom:12px;
+}
+
+.search-wrap input {
+    padding-left:36px;
+}
+
+.search-icon {
+    position:absolute;
+    left:12px;
+    top:12px;
+    color:#91a0bd;
+}
+
+/* EXTENSION ITEMS */
+
+.extension {
+    padding:13px;
+
+    background:#222f48;
+
+    border:1px solid #ffffff0d;
+
+    border-radius:13px;
+
+    margin-bottom:10px;
+}
+
+.extension-top {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:10px;
+}
+
+.extension-name {
+    font-size:13px;
+    font-weight:750;
+    overflow-wrap:anywhere;
+}
+
+.extension-description {
+    font-size:11px;
+    color:#a7b4ce;
+    margin-top:6px;
+    line-height:1.5;
+}
+
+.status {
+    padding:5px 8px;
+    border-radius:20px;
+
+    font-size:9px;
+    font-weight:800;
+
+    background:#174c3b;
+    color:#79e3ae;
+    white-space:nowrap;
+}
+
+.status.off {
+    background:#38445c;
+    color:#b5c0d7;
+}
+
+.extension-actions {
+    display:flex;
+    flex-wrap:wrap;
+    gap:5px;
+    margin-top:12px;
+}
+
+.extension-actions button {
+    flex:1;
+    min-width:55px;
+}
+
+/* EMPTY */
+
+.empty {
+    padding:25px 10px;
+    text-align:center;
+    color:#8d9bb6;
+    font-size:12px;
+}
+
+.empty-icon {
+    font-size:30px;
+    margin-bottom:8px;
+}
+
+/* FOOTER */
+
+.footer {
+    padding:11px;
+
+    border-top:1px solid #ffffff12;
+
+    text-align:center;
+
+    font-size:10px;
+    color:#8492ad;
+
+    background:#151e31;
+}
+
+/* TOAST */
+
+#toast {
+    position:fixed;
+
+    bottom:25px;
+    left:50%;
+
+    transform:translateX(-50%);
+
+    background:#303f60;
+    color:white;
+
+    padding:11px 16px;
+
+    border-radius:10px;
+
+    font-size:12px;
+
+    display:none;
+
+    box-shadow:0 5px 20px #0008;
+}
+
+/* POSITION MENU */
+
+#position-menu {
+    background:#263653;
+    border-radius:12px;
+    padding:12px;
+    margin-bottom:12px;
+}
+
+.position-grid {
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:7px;
+    margin-top:10px;
+}
+
+.position-grid button {
+    padding:9px 4px;
+    font-size:10px;
+}
+
+</style>
+
+
+<!-- BUBBLE -->
+
+<button id="bubble" aria-label="Open MistaX">
+    ✦
+</button>
+
+
+<!-- PANEL -->
+
+<div id="panel" class="hidden">
+
+    <div class="header" id="drag-handle">
+
+        <div class="brand">
+
+            <div class="logo">✦</div>
+
+            <div>
+                <div class="brand-name">MistaX Store</div>
+                <div class="brand-sub">YOUR MOBILE EXTENSION HUB</div>
             </div>
 
-            <div id="mx-content">
+        </div>
 
-                <p class="mx-subtitle">
-                    Local JavaScript Extension Manager
-                </p>
+        <div class="header-actions">
 
-                <div class="mx-card">
+            <button class="icon-btn" id="position-toggle" title="Bubble position">
+                ⌖
+            </button>
 
-                    <h3 id="mx-form-title">
-                        Add Extension
-                    </h3>
+            <button class="icon-btn" id="minimize" title="Minimize">
+                −
+            </button>
 
-                    <input
-                        class="mx-input"
-                        id="mx-name"
-                        placeholder="Extension Name"
-                    >
+            <button class="icon-btn" id="close" title="Close">
+                ×
+            </button>
 
-                    <input
-                        class="mx-input"
-                        id="mx-description"
-                        placeholder="Description"
-                    >
+        </div>
 
-                    <textarea
-                        class="mx-input"
-                        id="mx-code"
-                        placeholder="api.toast('Hello MistaX!')"
-                    ></textarea>
+    </div>
 
-                    <button class="mx-btn" id="mx-save">
-                        Save Extension
-                    </button>
 
-                    <button class="mx-btn mx-secondary" id="mx-clear">
-                        Clear
-                    </button>
+    <div class="content" id="content">
 
+        <div class="hero">
+
+            <div class="hero-title">
+                Welcome to MistaX
+            </div>
+
+            <div class="hero-description">
+                Manage your JavaScript extensions locally.
+                Your installed extensions stay in IndexedDB.
+            </div>
+
+            <div class="stats">
+
+                <div class="stat">
+                    <strong id="total-count">0</strong>
+                    <span>Extensions</span>
                 </div>
 
-                <div class="mx-card">
-
-                    <h3>
-                        Installed Extensions
-                    </h3>
-
-                    <div id="mx-list">
-                        Loading...
-                    </div>
-
+                <div class="stat">
+                    <strong id="active-count">0</strong>
+                    <span>Enabled</span>
                 </div>
 
-                <div class="mx-card">
-
-                    <h3>Backup</h3>
-
-                    <button class="mx-btn" id="mx-export">
-                        Export JSON
-                    </button>
-
-                    <button class="mx-btn mx-secondary" id="mx-import">
-                        Import JSON
-                    </button>
-
-                    <input
-                        type="file"
-                        id="mx-file"
-                        accept=".json,application/json"
-                        hidden
-                    >
-
-                </div>
-
-                <div class="mx-footer">
-                    MistaX V2 • IndexedDB Storage
+                <div class="stat">
+                    <strong id="disabled-count">0</strong>
+                    <span>Disabled</span>
                 </div>
 
             </div>
 
         </div>
 
-        <div id="mx-toast"></div>
 
-    `;
+        <!-- POSITION SETTINGS -->
 
-    document.documentElement.appendChild(host);
+        <div id="position-menu" class="hidden">
 
-    /* =====================================
-       ELEMENTS
-    ===================================== */
+            <div style="font-weight:750;font-size:13px">
+                Bubble Position
+            </div>
 
-    const $ = id => shadow.getElementById(id);
+            <div class="hero-description">
+                Choose a starting corner or drag the bubble anywhere.
+            </div>
 
-    const bubble = $("mx-bubble");
-    const panel = $("mx-panel");
-    const header = $("mx-header");
+            <div class="position-grid">
 
-    let editingId = null;
+                <button class="btn btn-secondary" data-position="top-left">
+                    ↖ Top Left
+                </button>
 
-    const activeCleanups = new Map();
+                <button class="btn btn-secondary" data-position="top-right">
+                    ↗ Top Right
+                </button>
 
-    /* =====================================
-       TOAST
-    ===================================== */
+                <button class="btn btn-secondary" data-position="bottom-left">
+                    ↙ Bottom Left
+                </button>
 
-    let toastTimer;
+                <button class="btn btn-secondary" data-position="bottom-right">
+                    ↘ Bottom Right
+                </button>
 
-    function toast(message) {
+                <button class="btn btn-secondary" id="reset-position">
+                    Reset
+                </button>
 
-        const element = $("mx-toast");
+            </div>
 
-        element.textContent = message;
-        element.style.display = "block";
+        </div>
 
-        clearTimeout(toastTimer);
 
-        toastTimer = setTimeout(() => {
-            element.style.display = "none";
-        }, 2200);
+        <!-- ADD EXTENSION -->
 
-    }
+        <div class="card">
 
-    /* =====================================
-       PANEL CONTROLS
-    ===================================== */
+            <div class="card-heading">
 
-    function openPanel() {
-        panel.classList.remove("hidden");
-        bubble.classList.add("hidden");
-    }
+                <h3 id="form-title">＋ Add Extension</h3>
 
-    function minimizePanel() {
-        panel.classList.add("hidden");
-        bubble.classList.remove("hidden");
-    }
+                <span class="badge">EDITOR</span>
 
-    bubble.onclick = openPanel;
+            </div>
 
-    $("mx-minimize").onclick = minimizePanel;
+            <input
+                class="input"
+                id="extension-name"
+                placeholder="Extension name"
+                maxlength="80"
+            >
 
-    $("mx-close").onclick = minimizePanel;
+            <input
+                class="input"
+                id="extension-description"
+                placeholder="Short description"
+                maxlength="180"
+            >
 
-    /* =====================================
-       DRAGGABLE BUBBLE
-    ===================================== */
+            <textarea
+                class="input"
+                id="extension-code"
+                placeholder="api.toast('Hello MistaX!')"
+                spellcheck="false"
+            ></textarea>
 
-    function makeDraggable(element, target) {
+            <div style="font-size:10px;color:#91a0bc;line-height:1.5;margin-bottom:10px">
+                JavaScript runs on the current webpage.
+                Only install code you trust.
+            </div>
 
-        let startX = 0;
-        let startY = 0;
+            <button class="btn" id="save-extension">
+                Save Extension
+            </button>
 
-        let initialX = 0;
-        let initialY = 0;
+            <button class="btn btn-secondary" id="clear-form">
+                Clear
+            </button>
 
-        let dragging = false;
+        </div>
 
-        element.addEventListener("pointerdown", event => {
 
-            if (event.button !== 0 && event.pointerType === "mouse") {
-                return;
-            }
+        <!-- INSTALLED -->
 
-            dragging = true;
+        <div class="card">
 
-            const rect = target.getBoundingClientRect();
+            <div class="card-heading">
 
-            startX = event.clientX;
-            startY = event.clientY;
+                <h3>Installed Extensions</h3>
 
-            initialX = rect.left;
-            initialY = rect.top;
+                <span class="badge" id="list-count">0 ITEMS</span>
 
-            element.setPointerCapture(event.pointerId);
+            </div>
 
-        });
+            <div class="search-wrap">
 
-        element.addEventListener("pointermove", event => {
+                <span class="search-icon">⌕</span>
 
-            if (!dragging) return;
+                <input
+                    class="input"
+                    id="search"
+                    placeholder="Search extensions..."
+                    style="margin:0"
+                >
 
-            const dx = event.clientX - startX;
-            const dy = event.clientY - startY;
+            </div>
 
-            const rect = target.getBoundingClientRect();
+            <div id="extension-list">
 
-            const width = rect.width;
-            const height = rect.height;
-
-            const left = Math.max(
-                0,
-                Math.min(
-                    window.innerWidth - width,
-                    initialX + dx
-                )
-            );
-
-            const top = Math.max(
-                0,
-                Math.min(
-                    window.innerHeight - height,
-                    initialY + dy
-                )
-            );
-
-            target.style.left = left + "px";
-            target.style.top = top + "px";
-            target.style.right = "auto";
-            target.style.bottom = "auto";
-
-        });
-
-        const stop = () => {
-            dragging = false;
-        };
-
-        element.addEventListener("pointerup", stop);
-        element.addEventListener("pointercancel", stop);
-
-    }
-
-    makeDraggable(bubble, bubble);
-
-    makeDraggable(header, panel);
-
-    /* =====================================
-       HELPERS
-    ===================================== */
-
-    function escapeHTML(value) {
-
-        return String(value ?? "").replace(
-            /[&<>"']/g,
-            character => ({
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                '"': "&quot;",
-                "'": "&#39;"
-            })[character]
-        );
-
-    }
-
-    function clearForm() {
-
-        editingId = null;
-
-        $("mx-name").value = "";
-        $("mx-description").value = "";
-        $("mx-code").value = "";
-
-        $("mx-form-title").textContent = "Add Extension";
-        $("mx-save").textContent = "Save Extension";
-
-    }
-
-    /* =====================================
-       EXTENSION RUNTIME
-    ===================================== */
-
-    async function executeExtension(id) {
-
-        const extension = await getExtension(id);
-
-        if (!extension) return;
-
-        try {
-
-            // Remove previous instance cleanup
-            const previousCleanup = activeCleanups.get(id);
-
-            if (previousCleanup) {
-                try {
-                    previousCleanup();
-                } catch (error) {
-                    console.error(error);
-                }
-
-                activeCleanups.delete(id);
-            }
-
-            const api = {
-
-                window,
-                document,
-
-                toast,
-
-                addStyle(css) {
-
-                    const style = document.createElement("style");
-
-                    style.textContent = css;
-
-                    document.documentElement.appendChild(style);
-
-                    return () => style.remove();
-
-                },
-
-                on(element, event, callback, options) {
-
-                    element.addEventListener(
-                        event,
-                        callback,
-                        options
-                    );
-
-                    return () => {
-                        element.removeEventListener(
-                            event,
-                            callback,
-                            options
-                        );
-                    };
-
-                }
-
-            };
-
-            const execute = new Function(
-                "api",
-                '"use strict";\n' + extension.code
-            );
-
-            const cleanup = execute(api);
-
-            if (typeof cleanup === "function") {
-                activeCleanups.set(id, cleanup);
-            }
-
-            toast("Executed: " + extension.name);
-
-        } catch (error) {
-
-            console.error("MistaX Extension Error:", error);
-
-            toast("Error: " + error.message);
-
-        }
-
-    }
-
-    /* =====================================
-       SAVE EXTENSION
-    ===================================== */
-
-    $("mx-save").onclick = async () => {
-
-        const name = $("mx-name").value.trim();
-
-        const description =
-            $("mx-description").value.trim();
-
-        const code = $("mx-code").value.trim();
-
-        if (!name || !code) {
-            return toast("Name and code required");
-        }
-
-        try {
-
-            const old = editingId
-                ? await getExtension(editingId)
-                : null;
-
-            const data = {
-
-                id: editingId || crypto.randomUUID(),
-
-                name,
-                description,
-                code,
-
-                enabled: old?.enabled || false,
-
-                updatedAt: Date.now()
-
-            };
-
-            await saveExtension(data);
-
-            clearForm();
-
-            await renderExtensions();
-
-            toast("Extension saved");
-
-        } catch (error) {
-
-            console.error(error);
-
-            toast("Save failed");
-
-        }
-
-    };
-
-    $("mx-clear").onclick = clearForm;
-
-    /* =====================================
-       EDIT EXTENSION
-    ===================================== */
-
-    async function editExtension(id) {
-
-        const extension = await getExtension(id);
-
-        if (!extension) return;
-
-        editingId = id;
-
-        $("mx-name").value = extension.name;
-
-        $("mx-description").value =
-            extension.description || "";
-
-        $("mx-code").value = extension.code;
-
-        $("mx-form-title").textContent = "Edit Extension";
-
-        $("mx-save").textContent = "Update Extension";
-
-        $("mx-content").scrollTo({
-            top: 0,
-            behavior: "smooth"
-        });
-
-    }
-
-    /* =====================================
-       DELETE EXTENSION
-    ===================================== */
-
-    async function removeExtension(id) {
-
-        if (!confirm("Delete this extension?")) {
-            return;
-        }
-
-        try {
-
-            const cleanup = activeCleanups.get(id);
-
-            if (cleanup) cleanup();
-
-        } catch (error) {
-            console.error(error);
-        }
-
-        activeCleanups.delete(id);
-
-        await deleteExtension(id);
-
-        await renderExtensions();
-
-        toast("Extension deleted");
-
-    }
-
-    /* =====================================
-       ENABLE / DISABLE
-    ===================================== */
-
-    async function toggleExtension(id) {
-
-        const extension = await getExtension(id);
-
-        if (!extension) return;
-
-        extension.enabled = !extension.enabled;
-
-        await saveExtension(extension);
-
-        if (extension.enabled) {
-
-            await executeExtension(id);
-
-        } else {
-
-            try {
-
-                activeCleanups.get(id)?.();
-
-            } catch (error) {
-                console.error(error);
-            }
-
-            activeCleanups.delete(id);
-
-            toast("Extension disabled");
-
-        }
-
-        await renderExtensions();
-
-    }
-
-    /* =====================================
-       RENDER EXTENSIONS
-    ===================================== */
-
-    async function renderExtensions() {
-
-        const items = await getAll();
-
-        const list = $("mx-list");
-
-        if (!items.length) {
-
-            list.innerHTML = `
-                <div class="mx-empty">
+                <div class="empty">
+                    <div class="empty-icon">✦</div>
                     No extensions installed.
-                </div>
-            `;
-
-            return;
-        }
-
-        list.innerHTML = items.map(extension => `
-
-            <div class="mx-item">
-
-                <div class="mx-item-title">
-                    ${escapeHTML(extension.name)}
-                </div>
-
-                <div class="mx-description">
-                    ${escapeHTML(extension.description)}
-                </div>
-
-                <div class="mx-status ${extension.enabled ? "" : "off"}">
-                    ${extension.enabled ? "● ENABLED" : "○ DISABLED"}
-                </div>
-
-                <div class="mx-actions">
-
-                    <button
-                        class="mx-btn"
-                        data-action="run"
-                        data-id="${escapeHTML(extension.id)}"
-                    >
-                        Run
-                    </button>
-
-                    <button
-                        class="mx-btn mx-secondary"
-                        data-action="toggle"
-                        data-id="${escapeHTML(extension.id)}"
-                    >
-                        ${extension.enabled ? "Disable" : "Enable"}
-                    </button>
-
-                    <button
-                        class="mx-btn mx-secondary"
-                        data-action="edit"
-                        data-id="${escapeHTML(extension.id)}"
-                    >
-                        Edit
-                    </button>
-
-                    <button
-                        class="mx-btn mx-danger"
-                        data-action="delete"
-                        data-id="${escapeHTML(extension.id)}"
-                    >
-                        Delete
-                    </button>
-
                 </div>
 
             </div>
 
-        `).join("");
+        </div>
+
+
+        <!-- BACKUP -->
+
+        <div class="card">
+
+            <div class="card-heading">
+                <h3>Data Management</h3>
+                <span class="badge">LOCAL</span>
+            </div>
+
+            <div style="font-size:11px;color:#a5b3cb;margin-bottom:12px">
+                Export your extensions or restore a previous backup.
+            </div>
+
+            <button class="btn" id="export">
+                ↓ Export Backup
+            </button>
+
+            <button class="btn btn-secondary" id="import">
+                ↑ Import Backup
+            </button>
+
+            <input
+                type="file"
+                id="import-file"
+                accept=".json,application/json"
+                hidden
+            >
+
+        </div>
+
+    </div>
+
+
+    <div class="footer">
+        MistaX V3 · IndexedDB · Local Storage
+    </div>
+
+</div>
+
+
+<div id="toast"></div>
+
+`;
+
+document.documentElement.appendChild(host);
+
+
+/* =========================================
+   ELEMENTS
+========================================= */
+
+const $ = id => shadow.getElementById(id);
+
+const bubble = $("bubble");
+const panel = $("panel");
+const header = $("drag-handle");
+
+let editingId = null;
+
+const cleanups = new Map();
+
+
+/* =========================================
+   TOAST
+========================================= */
+
+let toastTimer;
+
+function toast(message) {
+
+    const el = $("toast");
+
+    el.textContent = message;
+    el.style.display = "block";
+
+    clearTimeout(toastTimer);
+
+    toastTimer = setTimeout(() => {
+        el.style.display = "none";
+    }, 2300);
+
+}
+
+
+/* =========================================
+   ESCAPE HTML
+========================================= */
+
+function escapeHTML(value) {
+
+    return String(value ?? "").replace(
+        /[&<>"']/g,
+        c => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        })[c]
+    );
+
+}
+
+
+/* =========================================
+   BUBBLE POSITION
+========================================= */
+
+function clampPosition(x, y, element) {
+
+    const rect = element.getBoundingClientRect();
+
+    return {
+        x: Math.max(
+            0,
+            Math.min(window.innerWidth - rect.width, x)
+        ),
+
+        y: Math.max(
+            0,
+            Math.min(window.innerHeight - rect.height, y)
+        )
+    };
+
+}
+
+function applyBubblePosition(x, y, persist = true) {
+
+    const pos = clampPosition(x, y, bubble);
+
+    bubble.style.left = pos.x + "px";
+    bubble.style.top = pos.y + "px";
+
+    bubble.style.right = "auto";
+    bubble.style.bottom = "auto";
+
+    if (persist) {
+        savePosition(pos.x, pos.y);
+    }
+
+}
+
+function setCorner(corner) {
+
+    const margin = 18;
+
+    const width = bubble.offsetWidth;
+    const height = bubble.offsetHeight;
+
+    let x = margin;
+    let y = margin;
+
+    if (corner.includes("right")) {
+        x = window.innerWidth - width - margin;
+    }
+
+    if (corner.includes("bottom")) {
+        y = window.innerHeight - height - margin;
+    }
+
+    applyBubblePosition(x, y);
+
+    $("position-menu").classList.add("hidden");
+
+    toast("Bubble position updated");
+
+}
+
+function initializeBubblePosition() {
+
+    const saved = loadPosition();
+
+    if (
+        saved &&
+        Number.isFinite(saved.x) &&
+        Number.isFinite(saved.y)
+    ) {
+
+        applyBubblePosition(saved.x, saved.y, false);
+
+    } else {
+
+        setCorner("bottom-right");
 
     }
 
-    /* =====================================
-       LIST EVENTS
-    ===================================== */
+}
 
-    $("mx-list").addEventListener("click", async event => {
+window.addEventListener("resize", () => {
 
-        const button = event.target.closest("button[data-action]");
+    const rect = bubble.getBoundingClientRect();
 
-        if (!button) return;
+    applyBubblePosition(rect.left, rect.top);
 
-        const id = button.dataset.id;
-        const action = button.dataset.action;
+});
 
-        if (action === "run") {
-            await executeExtension(id);
+
+/* =========================================
+   BUBBLE DRAGGING
+========================================= */
+
+let bubbleDragging = false;
+let bubbleMoved = false;
+
+let bubbleStartX = 0;
+let bubbleStartY = 0;
+
+let bubbleOriginX = 0;
+let bubbleOriginY = 0;
+
+bubble.addEventListener("pointerdown", event => {
+
+    if (event.button !== 0 && event.pointerType === "mouse") {
+        return;
+    }
+
+    bubbleDragging = true;
+    bubbleMoved = false;
+
+    const rect = bubble.getBoundingClientRect();
+
+    bubbleStartX = event.clientX;
+    bubbleStartY = event.clientY;
+
+    bubbleOriginX = rect.left;
+    bubbleOriginY = rect.top;
+
+    bubble.setPointerCapture(event.pointerId);
+
+});
+
+bubble.addEventListener("pointermove", event => {
+
+    if (!bubbleDragging) return;
+
+    const dx = event.clientX - bubbleStartX;
+    const dy = event.clientY - bubbleStartY;
+
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        bubbleMoved = true;
+    }
+
+    if (!bubbleMoved) return;
+
+    applyBubblePosition(
+        bubbleOriginX + dx,
+        bubbleOriginY + dy
+    );
+
+});
+
+bubble.addEventListener("pointerup", () => {
+
+    if (!bubbleDragging) return;
+
+    bubbleDragging = false;
+
+    if (!bubbleMoved) {
+        openPanel();
+    } else {
+        toast("Bubble position saved");
+    }
+
+});
+
+bubble.addEventListener("pointercancel", () => {
+    bubbleDragging = false;
+});
+
+
+/* =========================================
+   PANEL OPEN / CLOSE
+========================================= */
+
+function openPanel() {
+
+    panel.classList.remove("hidden");
+    bubble.classList.add("hidden");
+
+}
+
+function minimizePanel() {
+
+    panel.classList.add("hidden");
+    bubble.classList.remove("hidden");
+
+}
+
+$("minimize").onclick = minimizePanel;
+$("close").onclick = minimizePanel;
+
+
+/* =========================================
+   PANEL DRAGGING
+========================================= */
+
+let panelDragging = false;
+
+let panelStartX = 0;
+let panelStartY = 0;
+
+let panelOriginX = 0;
+let panelOriginY = 0;
+
+header.addEventListener("pointerdown", event => {
+
+    if (event.target.closest("button")) return;
+
+    panelDragging = true;
+
+    const rect = panel.getBoundingClientRect();
+
+    panelStartX = event.clientX;
+    panelStartY = event.clientY;
+
+    panelOriginX = rect.left;
+    panelOriginY = rect.top;
+
+    header.setPointerCapture(event.pointerId);
+
+});
+
+header.addEventListener("pointermove", event => {
+
+    if (!panelDragging) return;
+
+    const dx = event.clientX - panelStartX;
+    const dy = event.clientY - panelStartY;
+
+    const rect = panel.getBoundingClientRect();
+
+    const x = Math.max(
+        0,
+        Math.min(
+            window.innerWidth - rect.width,
+            panelOriginX + dx
+        )
+    );
+
+    const y = Math.max(
+        0,
+        Math.min(
+            window.innerHeight - rect.height,
+            panelOriginY + dy
+        )
+    );
+
+    panel.style.left = x + "px";
+    panel.style.top = y + "px";
+
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+
+});
+
+header.addEventListener("pointerup", () => {
+    panelDragging = false;
+});
+
+header.addEventListener("pointercancel", () => {
+    panelDragging = false;
+});
+
+
+/* =========================================
+   POSITION SETTINGS
+========================================= */
+
+$("position-toggle").onclick = () => {
+
+    $("position-menu").classList.toggle("hidden");
+
+};
+
+$("position-menu").addEventListener("click", event => {
+
+    const button = event.target.closest("[data-position]");
+
+    if (!button) return;
+
+    setCorner(button.dataset.position);
+
+});
+
+$("reset-position").onclick = () => {
+
+    localStorage.removeItem(POSITION_KEY);
+
+    setCorner("bottom-right");
+
+};
+
+
+/* =========================================
+   FORM
+========================================= */
+
+function clearForm() {
+
+    editingId = null;
+
+    $("extension-name").value = "";
+    $("extension-description").value = "";
+    $("extension-code").value = "";
+
+    $("form-title").textContent = "＋ Add Extension";
+    $("save-extension").textContent = "Save Extension";
+
+}
+
+$("clear-form").onclick = clearForm;
+
+
+/* =========================================
+   SAVE
+========================================= */
+
+$("save-extension").onclick = async () => {
+
+    const name = $("extension-name").value.trim();
+
+    const description =
+        $("extension-description").value.trim();
+
+    const code = $("extension-code").value.trim();
+
+    if (!name || !code) {
+        return toast("Enter name and JavaScript code");
+    }
+
+    try {
+
+        const old = editingId
+            ? await getItem(editingId)
+            : null;
+
+        const item = {
+
+            id: editingId || crypto.randomUUID(),
+
+            name,
+            description,
+            code,
+
+            enabled: old?.enabled || false,
+
+            updatedAt: Date.now()
+
+        };
+
+        await saveItem(item);
+
+        clearForm();
+
+        await render();
+
+        toast("Extension saved successfully");
+
+    } catch (error) {
+
+        console.error(error);
+
+        toast("Could not save extension");
+
+    }
+
+};
+
+
+/* =========================================
+   EXTENSION RUNTIME
+========================================= */
+
+async function executeExtension(id) {
+
+    const item = await getItem(id);
+
+    if (!item) return;
+
+    try {
+
+        const previous = cleanups.get(id);
+
+        if (previous) {
+
+            try {
+                previous();
+            } catch (error) {
+                console.error(error);
+            }
+
+            cleanups.delete(id);
+
         }
 
-        if (action === "toggle") {
-            await toggleExtension(id);
+        const api = {
+
+            window,
+            document,
+
+            toast,
+
+            addStyle(css) {
+
+                const style = document.createElement("style");
+
+                style.textContent = css;
+
+                document.documentElement.appendChild(style);
+
+                return () => style.remove();
+
+            },
+
+            on(element, event, callback, options) {
+
+                element.addEventListener(
+                    event,
+                    callback,
+                    options
+                );
+
+                return () => {
+                    element.removeEventListener(
+                        event,
+                        callback,
+                        options
+                    );
+                };
+
+            }
+
+        };
+
+        const execute = new Function(
+            "api",
+            '"use strict";\n' + item.code
+        );
+
+        const cleanup = execute(api);
+
+        if (typeof cleanup === "function") {
+            cleanups.set(id, cleanup);
         }
 
-        if (action === "edit") {
-            await editExtension(id);
+        toast("Executed: " + item.name);
+
+    } catch (error) {
+
+        console.error("MistaX Runtime:", error);
+
+        toast(error.message);
+
+    }
+
+}
+
+
+/* =========================================
+   EDIT
+========================================= */
+
+async function editExtension(id) {
+
+    const item = await getItem(id);
+
+    if (!item) return;
+
+    editingId = id;
+
+    $("extension-name").value = item.name;
+
+    $("extension-description").value =
+        item.description || "";
+
+    $("extension-code").value = item.code;
+
+    $("form-title").textContent = "✎ Edit Extension";
+
+    $("save-extension").textContent = "Update Extension";
+
+    $("content").scrollTo({
+        top: 0,
+        behavior: "smooth"
+    });
+
+}
+
+
+/* =========================================
+   DELETE
+========================================= */
+
+async function removeExtension(id) {
+
+    if (!confirm("Are you sure you want to delete this extension?")) {
+        return;
+    }
+
+    try {
+
+        cleanups.get(id)?.();
+
+    } catch (error) {
+        console.error(error);
+    }
+
+    cleanups.delete(id);
+
+    await deleteItem(id);
+
+    await render();
+
+    toast("Extension deleted");
+
+}
+
+
+/* =========================================
+   ENABLE / DISABLE
+========================================= */
+
+async function toggleExtension(id) {
+
+    const item = await getItem(id);
+
+    if (!item) return;
+
+    item.enabled = !item.enabled;
+
+    await saveItem(item);
+
+    if (item.enabled) {
+
+        await executeExtension(id);
+
+    } else {
+
+        try {
+            cleanups.get(id)?.();
+        } catch (error) {
+            console.error(error);
         }
 
-        if (action === "delete") {
-            await removeExtension(id);
-        }
+        cleanups.delete(id);
+
+        toast("Extension disabled");
+
+    }
+
+    await render();
+
+}
+
+
+/* =========================================
+   RENDER
+========================================= */
+
+async function render() {
+
+    const items = await getAll();
+
+    const search = $("search").value
+        .trim()
+        .toLowerCase();
+
+    const filtered = items.filter(item => {
+
+        return (
+            item.name.toLowerCase().includes(search) ||
+            (item.description || "").toLowerCase().includes(search)
+        );
 
     });
 
-    /* =====================================
-       EXPORT BACKUP
-    ===================================== */
+    const enabled = items.filter(item => item.enabled).length;
 
-    $("mx-export").onclick = async () => {
+    $("total-count").textContent = items.length;
+    $("active-count").textContent = enabled;
+    $("disabled-count").textContent = items.length - enabled;
 
-        try {
+    $("list-count").textContent = items.length + " ITEMS";
 
-            const items = await getAll();
+    if (!filtered.length) {
 
-            const backup = {
+        $("extension-list").innerHTML = `
+            <div class="empty">
+                <div class="empty-icon">✦</div>
+                ${items.length ? "No matching extensions." : "No extensions installed yet."}
+            </div>
+        `;
 
-                app: "MistaX",
-
-                version: 2,
-
-                exportedAt: new Date().toISOString(),
-
-                extensions: items
-
-            };
-
-            const blob = new Blob(
-                [JSON.stringify(backup, null, 2)],
-                {
-                    type: "application/json"
-                }
-            );
-
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement("a");
-
-            link.href = url;
-            link.download = "mistax-backup.json";
-
-            link.click();
-
-            setTimeout(() => {
-                URL.revokeObjectURL(url);
-            }, 1500);
-
-            toast("Backup exported");
-
-        } catch (error) {
-
-            console.error(error);
-
-            toast("Export failed");
-
-        }
-
-    };
-
-    /* =====================================
-       IMPORT BACKUP
-    ===================================== */
-
-    $("mx-import").onclick = () => {
-        $("mx-file").click();
-    };
-
-    $("mx-file").onchange = async event => {
-
-        const file = event.target.files[0];
-
-        if (!file) return;
-
-        try {
-
-            const backup = JSON.parse(await file.text());
-
-            const items = Array.isArray(backup)
-                ? backup
-                : backup.extensions;
-
-            if (!Array.isArray(items)) {
-                throw new Error("Invalid backup");
-            }
-
-            for (const item of items) {
-
-                if (
-                    item &&
-                    typeof item.id === "string" &&
-                    typeof item.name === "string" &&
-                    typeof item.code === "string"
-                ) {
-
-                    await saveExtension({
-                        id: item.id,
-                        name: item.name,
-                        description: item.description || "",
-                        code: item.code,
-                        enabled: Boolean(item.enabled),
-                        updatedAt: Date.now()
-                    });
-
-                }
-
-            }
-
-            await renderExtensions();
-
-            toast("Backup imported");
-
-        } catch (error) {
-
-            console.error(error);
-
-            toast("Invalid backup file");
-
-        }
-
-        event.target.value = "";
-
-    };
-
-    /* =====================================
-       INITIALIZE
-    ===================================== */
-
-    async function initialize() {
-
-        try {
-
-            db = await openDatabase();
-
-            db.onversionchange = () => db.close();
-
-            await renderExtensions();
-
-            // Run previously enabled extensions
-            const extensions = await getAll();
-
-            for (const extension of extensions) {
-
-                if (extension.enabled) {
-                    await executeExtension(extension.id);
-                }
-
-            }
-
-        } catch (error) {
-
-            console.error("MistaX Initialization:", error);
-
-            toast("Database initialization failed");
-
-        }
+        return;
 
     }
 
-    initialize();
+    $("extension-list").innerHTML = filtered.map(item => `
+
+        <div class="extension">
+
+            <div class="extension-top">
+
+                <div class="extension-name">
+                    ${escapeHTML(item.name)}
+                </div>
+
+                <div class="status ${item.enabled ? "" : "off"}">
+                    ${item.enabled ? "ENABLED" : "DISABLED"}
+                </div>
+
+            </div>
+
+            <div class="extension-description">
+                ${escapeHTML(item.description || "No description")}
+            </div>
+
+            <div class="extension-actions">
+
+                <button
+                    class="btn"
+                    data-action="run"
+                    data-id="${escapeHTML(item.id)}"
+                >
+                    ▶ Run
+                </button>
+
+                <button
+                    class="btn btn-secondary"
+                    data-action="toggle"
+                    data-id="${escapeHTML(item.id)}"
+                >
+                    ${item.enabled ? "Disable" : "Enable"}
+                </button>
+
+                <button
+                    class="btn btn-secondary"
+                    data-action="edit"
+                    data-id="${escapeHTML(item.id)}"
+                >
+                    Edit
+                </button>
+
+                <button
+                    class="btn btn-danger"
+                    data-action="delete"
+                    data-id="${escapeHTML(item.id)}"
+                >
+                    Delete
+                </button>
+
+            </div>
+
+        </div>
+
+    `).join("");
+
+}
+
+
+/* =========================================
+   LIST ACTIONS
+========================================= */
+
+$("extension-list").addEventListener("click", async event => {
+
+    const button = event.target.closest("[data-action]");
+
+    if (!button) return;
+
+    const id = button.dataset.id;
+    const action = button.dataset.action;
+
+    if (action === "run") {
+        await executeExtension(id);
+    }
+
+    if (action === "toggle") {
+        await toggleExtension(id);
+    }
+
+    if (action === "edit") {
+        await editExtension(id);
+    }
+
+    if (action === "delete") {
+        await removeExtension(id);
+    }
+
+});
+
+
+/* =========================================
+   SEARCH
+========================================= */
+
+$("search").addEventListener("input", render);
+
+
+/* =========================================
+   EXPORT
+========================================= */
+
+$("export").onclick = async () => {
+
+    try {
+
+        const items = await getAll();
+
+        const backup = {
+
+            app: "MistaX",
+
+            version: 3,
+
+            exportedAt: new Date().toISOString(),
+
+            extensions: items
+
+        };
+
+        const blob = new Blob(
+            [JSON.stringify(backup, null, 2)],
+            { type: "application/json" }
+        );
+
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+
+        link.href = url;
+        link.download = "mistax-backup.json";
+
+        link.click();
+
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+        toast("Backup exported");
+
+    } catch (error) {
+
+        console.error(error);
+
+        toast("Export failed");
+
+    }
+
+};
+
+
+/* =========================================
+   IMPORT
+========================================= */
+
+$("import").onclick = () => {
+    $("import-file").click();
+};
+
+$("import-file").onchange = async event => {
+
+    const file = event.target.files[0];
+
+    if (!file) return;
+
+    try {
+
+        const backup = JSON.parse(await file.text());
+
+        const items = Array.isArray(backup)
+            ? backup
+            : backup.extensions;
+
+        if (!Array.isArray(items)) {
+            throw new Error("Invalid backup");
+        }
+
+        for (const item of items) {
+
+            if (
+                item &&
+                typeof item.id === "string" &&
+                typeof item.name === "string" &&
+                typeof item.code === "string"
+            ) {
+
+                await saveItem({
+
+                    id: item.id,
+
+                    name: item.name,
+
+                    description: item.description || "",
+
+                    code: item.code,
+
+                    enabled: Boolean(item.enabled),
+
+                    updatedAt: Date.now()
+
+                });
+
+            }
+
+        }
+
+        await render();
+
+        toast("Backup imported");
+
+    } catch (error) {
+
+        console.error(error);
+
+        toast("Invalid backup file");
+
+    }
+
+    event.target.value = "";
+
+};
+
+
+/* =========================================
+   INITIALIZATION
+========================================= */
+
+async function initialize() {
+
+    try {
+
+        db = await openDB();
+
+        db.onversionchange = () => db.close();
+
+        initializeBubblePosition();
+
+        await render();
+
+        const items = await getAll();
+
+        for (const item of items) {
+
+            if (item.enabled) {
+                await executeExtension(item.id);
+            }
+
+        }
+
+        toast("MistaX ready");
+
+    } catch (error) {
+
+        console.error("MistaX initialization:", error);
+
+        toast("Initialization failed");
+
+    }
+
+}
+
+initialize();
 
 })();
