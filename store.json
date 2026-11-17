@@ -1,0 +1,35 @@
+{
+  "name": "MistaX Store",
+  "publisher": "MistaHub",
+  "version": "1.0.0",
+  "description": "Verified browser extensions for MistaX",
+  "website": "https://mistahub.in",
+  "contact": {
+    "email": "support@mistahub.in",
+    "telegram": "https://t.me/mistahub"
+  },
+  "extensions": [
+    {
+      "id": "dark-mode",
+      "name": "Dark Mode",
+      "description": "Apply a dark theme to supported websites.",
+      "icon": "🌙",
+      "version": "1.0.0",
+      "category": "Appearance",
+      "author": "MistaHub",
+      "verified": true,
+      "script": "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/extensions/dark-mode/main.js"
+    },
+    {
+      "id": "page-info",
+      "name": "Page Information",
+      "description": "View the current page title, URL and basic information.",
+      "icon": "ℹ️",
+      "version": "1.0.0",
+      "category": "Tools",
+      "author": "MistaHub",
+      "verified": true,
+      "script": "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/extensions/page-info/main.js"
+    }
+  ]
+}
