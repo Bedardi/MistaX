@@ -673,14 +673,19 @@ async function toggleExtension(id) {
     renderInstalled();
     renderHome();
 }
-
 /* =========================================
-   MISTAX STORE V4.1.0
+   MISTAX STORE V4.1.1
 ========================================= */
+
+const STORE_SOURCES = [
+    "https://raw.githubusercontent.com/Bedardi/MistaX/main/store.json",
+    "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/store.json",
+    "https://api.github.com/repos/Bedardi/MistaX/contents/store.json?ref=main"
+];
 
 function validateCatalogue(data) {
     if (!data || !Array.isArray(data.extensions)) {
-        throw new Error("Invalid store.json: extensions array missing");
+        throw new Error("Invalid store.json");
     }
 
     const valid = [];
@@ -702,23 +707,19 @@ function validateCatalogue(data) {
 
         if (seen.has(item.id)) continue;
 
-        let scriptURL;
-
         try {
-            scriptURL = new URL(item.script);
+            const scriptURL = new URL(item.script);
+
+            if (
+                scriptURL.protocol !== "https:" ||
+                ![
+                    "cdn.jsdelivr.net",
+                    "fastly.jsdelivr.net"
+                ].includes(scriptURL.hostname)
+            ) {
+                continue;
+            }
         } catch {
-            continue;
-        }
-
-        const allowedHosts = [
-            "cdn.jsdelivr.net",
-            "fastly.jsdelivr.net"
-        ];
-
-        if (
-            scriptURL.protocol !== "https:" ||
-            !allowedHosts.includes(scriptURL.hostname)
-        ) {
             continue;
         }
 
@@ -726,20 +727,14 @@ function validateCatalogue(data) {
 
         valid.push({
             ...item,
-            description: typeof item.description === "string"
-                ? item.description
-                : "",
-            category: typeof item.category === "string"
-                ? item.category
-                : "Other",
-            icon: typeof item.icon === "string"
-                ? item.icon
-                : ""
+            description: item.description || "",
+            category: item.category || "Other",
+            icon: item.icon || ""
         });
     }
 
-    if (!valid.length && data.extensions.length) {
-        throw new Error("No valid extensions found in catalogue");
+    if (!valid.length) {
+        throw new Error("No valid extensions found");
     }
 
     return valid;
@@ -763,54 +758,45 @@ function makeFreshURL(source) {
         separator +
         "_mistax=" +
         Date.now() +
-        "_" +
         Math.random().toString(36).slice(2);
 }
 
-async function fetchWithTimeout(url, options = {}, timeout = 15000) {
+async function fetchWithTimeout(url, timeout = 15000) {
     const controller = new AbortController();
 
-    const timer = setTimeout(() => {
-        controller.abort();
-    }, timeout);
+    const timer = setTimeout(
+        () => controller.abort(),
+        timeout
+    );
 
     try {
-        return await fetch(url, {
-            ...options,
-            cache: "no-store",
+        /*
+         * IMPORTANT:
+         * No custom request headers.
+         * This avoids unnecessary CORS preflight.
+         */
+        const response = await fetch(makeFreshURL(url), {
+            method: "GET",
             mode: "cors",
             credentials: "omit",
+            cache: "no-store",
             redirect: "follow",
-            signal: controller.signal,
-            headers: {
-                "Accept": "application/json",
-                "Cache-Control": "no-cache, no-store, max-age=0",
-                "Pragma": "no-cache",
-                ...(options.headers || {})
-            }
+            signal: controller.signal
         });
+
+        if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+        }
+
+        return response;
+
     } finally {
         clearTimeout(timer);
     }
 }
 
 async function fetchStoreSource(source) {
-    const url = makeFreshURL(source);
-
-    const response = await fetchWithTimeout(url, {
-        headers: source.includes("api.github.com")
-            ? {
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28"
-            }
-            : {
-                "Accept": "application/json"
-            }
-    });
-
-    if (!response.ok) {
-        throw new Error("HTTP " + response.status);
-    }
+    const response = await fetchWithTimeout(source);
 
     let data;
 
@@ -820,13 +806,15 @@ async function fetchStoreSource(source) {
         if (
             !result ||
             result.type !== "file" ||
-            typeof result.content !== "string"
+            !result.content
         ) {
             throw new Error("Invalid GitHub API response");
         }
 
-        const decoded = decodeBase64UTF8(result.content);
-        data = JSON.parse(decoded);
+        data = JSON.parse(
+            decodeBase64UTF8(result.content)
+        );
+
     } else {
         data = await response.json();
     }
@@ -834,11 +822,8 @@ async function fetchStoreSource(source) {
     const extensions = validateCatalogue(data);
 
     return {
-        data: {
-            ...data,
-            extensions
-        },
-        source
+        ...data,
+        extensions
     };
 }
 
@@ -847,28 +832,25 @@ async function fetchLatestCatalogue() {
 
     for (const source of STORE_SOURCES) {
         try {
-            const result = await fetchStoreSource(source);
+            const data = await fetchStoreSource(source);
 
-            console.log(
-                "MistaX Store loaded from:",
+            return {
+                data,
                 source
-            );
+            };
 
-            return result;
         } catch (error) {
             console.warn(
                 "MistaX Store source failed:",
                 source,
-                error.message
+                error
             );
 
             errors.push(error.message);
         }
     }
 
-    throw new Error(
-        "All Store sources failed: " + errors.join(" | ")
-    );
+    throw new Error(errors.join(" | "));
 }
 
 async function loadCachedStore() {
@@ -878,9 +860,7 @@ async function loadCachedStore() {
         return false;
     }
 
-    const extensions = validateCatalogue(cached.data);
-
-    catalogue = extensions;
+    catalogue = validateCatalogue(cached.data);
 
     const categories = new Set(
         catalogue.map(item => item.category || "Other")
@@ -913,7 +893,7 @@ async function loadStore(force = false) {
 
     if (status) {
         status.textContent = catalogue.length
-            ? "Checking for Store updates..."
+            ? "Checking for updates..."
             : "Connecting to MistaX Store...";
     }
 
@@ -924,44 +904,35 @@ async function loadStore(force = false) {
 
     try {
         /*
-         * First show locally cached Store.
-         * Network request still runs after this.
+         * Load local cache immediately.
          */
         if (!catalogue.length) {
             try {
                 await loadCachedStore();
-            } catch (cacheError) {
-                console.warn(
-                    "MistaX cached Store error:",
-                    cacheError
-                );
+            } catch (error) {
+                console.warn("Cache error:", error);
             }
-        } else if (force) {
-            renderCategories();
-            await renderStoreCards();
         }
 
         /*
-         * Fetch latest catalogue from GitHub sources.
+         * Fetch latest Store.
          */
         const result = await fetchLatestCatalogue();
 
-        const latestCatalogue = result.data;
+        const latest = result.data;
 
-        /*
-         * Do not overwrite cache with invalid/empty data.
-         */
         if (
-            !latestCatalogue ||
-            !Array.isArray(latestCatalogue.extensions)
+            !latest ||
+            !Array.isArray(latest.extensions) ||
+            !latest.extensions.length
         ) {
-            throw new Error("Invalid latest catalogue");
+            throw new Error("Invalid Store catalogue");
         }
 
         /*
-         * Update memory only after successful validation.
+         * Update in-memory catalogue.
          */
-        catalogue = latestCatalogue.extensions;
+        catalogue = latest.extensions;
 
         const categories = new Set(
             catalogue.map(item => item.category || "Other")
@@ -975,9 +946,9 @@ async function loadStore(force = false) {
         }
 
         /*
-         * Save only successfully validated catalogue.
+         * Save valid Store data.
          */
-        await DB.setStore(latestCatalogue);
+        await DB.setStore(latest);
 
         await DB.setSetting(
             "lastStoreSync",
@@ -989,29 +960,29 @@ async function loadStore(force = false) {
 
         if (status) {
             status.textContent =
-                "Store is up to date · " +
+                "Store updated · " +
                 catalogue.length +
                 " extensions";
         }
 
         console.log(
-            "MistaX Store updated:",
-            catalogue.length,
-            "extensions"
+            "MistaX Store loaded:",
+            result.source,
+            catalogue.length
         );
 
     } catch (error) {
         console.error("MistaX Store error:", error);
 
         /*
-         * If memory is empty, attempt cache one more time.
+         * Try local cache if network fails.
          */
         if (!catalogue.length) {
             try {
                 await loadCachedStore();
             } catch (cacheError) {
                 console.error(
-                    "MistaX cache recovery failed:",
+                    "Cache recovery failed:",
                     cacheError
                 );
             }
@@ -1020,7 +991,7 @@ async function loadStore(force = false) {
         if (status) {
             status.textContent = catalogue.length
                 ? "Showing saved Store · Update unavailable"
-                : "Unable to load Store. Check your connection.";
+                : "Unable to load Store: " + error.message;
         }
 
         if (catalogue.length) {
