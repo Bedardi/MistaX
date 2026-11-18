@@ -1,11 +1,19 @@
 (() => {
 "use strict";
 
-const VERSION = "4.0.0";
+const VERSION = "4.1.0";
 const DB_NAME = "MistaXStore";
 const DB_VERSION = 4;
+
 const REPO = "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/";
 const STORE_URL = REPO + "store.json";
+
+const STORE_SOURCES = [
+    "https://raw.githubusercontent.com/Bedardi/MistaX/main/store.json",
+    "https://api.github.com/repos/Bedardi/MistaX/contents/store.json?ref=main",
+    "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/store.json"
+];
+
 const APP_ID = "mistax-host";
 
 const CONTACT = {
@@ -54,7 +62,11 @@ function openDatabase() {
 
 function dbRequest(store, method, value) {
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(store, method === "get" || method === "getAll" ? "readonly" : "readwrite");
+        const tx = db.transaction(
+            store,
+            method === "get" || method === "getAll" ? "readonly" : "readwrite"
+        );
+
         const objectStore = tx.objectStore(store);
         let request;
 
@@ -94,14 +106,18 @@ const DB = {
     remove: id => dbRequest("extensions", "delete", id),
     setting: key => dbRequest("settings", "get", key),
     setSetting: (key, value) => dbRequest("settings", "put", { key, value }),
+
     getStore: () => dbRequest("storeCache", "get", "catalogue"),
+
     setStore: data => dbRequest("storeCache", "put", {
         key: "catalogue",
         data,
         cachedAt: Date.now()
     }),
+
     getScript: id => dbRequest("scriptCache", "get", id),
     setScript: item => dbRequest("scriptCache", "put", item),
+
     reset: () => dbBatch(
         ["extensions", "settings", "storeCache", "scriptCache", "metadata"],
         tx => {
@@ -129,11 +145,14 @@ let selectedCategory = "All";
 let currentPage = "home";
 let selectedExtension = null;
 let storeLoading = false;
+
 const runtime = new Map();
 
 const host = document.createElement("div");
 host.id = APP_ID;
-host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+host.style.cssText =
+    "position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+
 document.documentElement.appendChild(host);
 
 const shadow = host.attachShadow({ mode: "open" });
@@ -494,9 +513,11 @@ function makeIcon(url, className = "exticon") {
         image.alt = "";
         image.loading = "lazy";
         image.referrerPolicy = "no-referrer";
+
         image.onerror = () => {
             holder.innerHTML = '<span class="fallback">M</span>';
         };
+
         holder.appendChild(image);
     } else {
         holder.innerHTML = '<span class="fallback">M</span>';
@@ -556,9 +577,11 @@ function createExtensionAPI(id) {
 async function executeExtension(item) {
     if (runtime.has(item.id)) {
         const existing = runtime.get(item.id);
+
         if (existing.status === "starting") {
             await existing.promise;
         }
+
         return;
     }
 
@@ -592,16 +615,22 @@ async function executeExtension(item) {
 
             state.status = "running";
             state.cleanup = () => api.cleanup();
+
             toast(item.name + " started");
         } catch (error) {
             api.cleanup();
-            if (runtime.get(item.id) === state) runtime.delete(item.id);
+
+            if (runtime.get(item.id) === state) {
+                runtime.delete(item.id);
+            }
+
             console.error(error);
             toast("Extension error: " + error.message);
         }
     })();
 
     await state.promise;
+
     renderHome();
     renderInstalled();
 }
@@ -640,94 +669,402 @@ async function toggleExtension(id) {
     }
 
     await DB.save(item);
+
     renderInstalled();
     renderHome();
 }
 
+/* =========================================
+   MISTAX STORE V4.1.0
+========================================= */
+
 function validateCatalogue(data) {
     if (!data || !Array.isArray(data.extensions)) {
-        throw new Error("Invalid store.json");
+        throw new Error("Invalid store.json: extensions array missing");
     }
 
-    return data.extensions.filter(item => {
-        return (
-            typeof item.id === "string" &&
-            /^[a-z0-9-]{2,60}$/.test(item.id) &&
-            typeof item.name === "string" &&
-            typeof item.version === "string" &&
-            typeof item.script === "string" &&
-            item.script.startsWith("https://cdn.jsdelivr.net/")
-        );
+    const valid = [];
+    const seen = new Set();
+
+    for (const item of data.extensions) {
+        if (!item || typeof item !== "object") continue;
+
+        if (
+            typeof item.id !== "string" ||
+            !/^[a-z0-9-]{2,60}$/.test(item.id) ||
+            typeof item.name !== "string" ||
+            !item.name.trim() ||
+            typeof item.version !== "string" ||
+            typeof item.script !== "string"
+        ) {
+            continue;
+        }
+
+        if (seen.has(item.id)) continue;
+
+        let scriptURL;
+
+        try {
+            scriptURL = new URL(item.script);
+        } catch {
+            continue;
+        }
+
+        const allowedHosts = [
+            "cdn.jsdelivr.net",
+            "fastly.jsdelivr.net"
+        ];
+
+        if (
+            scriptURL.protocol !== "https:" ||
+            !allowedHosts.includes(scriptURL.hostname)
+        ) {
+            continue;
+        }
+
+        seen.add(item.id);
+
+        valid.push({
+            ...item,
+            description: typeof item.description === "string"
+                ? item.description
+                : "",
+            category: typeof item.category === "string"
+                ? item.category
+                : "Other",
+            icon: typeof item.icon === "string"
+                ? item.icon
+                : ""
+        });
+    }
+
+    if (!valid.length && data.extensions.length) {
+        throw new Error("No valid extensions found in catalogue");
+    }
+
+    return valid;
+}
+
+function decodeBase64UTF8(value) {
+    const binary = atob(value.replace(/\s/g, ""));
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+
+    return new TextDecoder("utf-8").decode(bytes);
+}
+
+function makeFreshURL(source) {
+    const separator = source.includes("?") ? "&" : "?";
+
+    return source +
+        separator +
+        "_mistax=" +
+        Date.now() +
+        "_" +
+        Math.random().toString(36).slice(2);
+}
+
+async function fetchWithTimeout(url, options = {}, timeout = 15000) {
+    const controller = new AbortController();
+
+    const timer = setTimeout(() => {
+        controller.abort();
+    }, timeout);
+
+    try {
+        return await fetch(url, {
+            ...options,
+            cache: "no-store",
+            mode: "cors",
+            credentials: "omit",
+            redirect: "follow",
+            signal: controller.signal,
+            headers: {
+                "Accept": "application/json",
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
+                ...(options.headers || {})
+            }
+        });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function fetchStoreSource(source) {
+    const url = makeFreshURL(source);
+
+    const response = await fetchWithTimeout(url, {
+        headers: source.includes("api.github.com")
+            ? {
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"
+            }
+            : {
+                "Accept": "application/json"
+            }
     });
+
+    if (!response.ok) {
+        throw new Error("HTTP " + response.status);
+    }
+
+    let data;
+
+    if (source.includes("api.github.com")) {
+        const result = await response.json();
+
+        if (
+            !result ||
+            result.type !== "file" ||
+            typeof result.content !== "string"
+        ) {
+            throw new Error("Invalid GitHub API response");
+        }
+
+        const decoded = decodeBase64UTF8(result.content);
+        data = JSON.parse(decoded);
+    } else {
+        data = await response.json();
+    }
+
+    const extensions = validateCatalogue(data);
+
+    return {
+        data: {
+            ...data,
+            extensions
+        },
+        source
+    };
+}
+
+async function fetchLatestCatalogue() {
+    const errors = [];
+
+    for (const source of STORE_SOURCES) {
+        try {
+            const result = await fetchStoreSource(source);
+
+            console.log(
+                "MistaX Store loaded from:",
+                source
+            );
+
+            return result;
+        } catch (error) {
+            console.warn(
+                "MistaX Store source failed:",
+                source,
+                error.message
+            );
+
+            errors.push(error.message);
+        }
+    }
+
+    throw new Error(
+        "All Store sources failed: " + errors.join(" | ")
+    );
+}
+
+async function loadCachedStore() {
+    const cached = await DB.getStore();
+
+    if (!cached || !cached.data) {
+        return false;
+    }
+
+    const extensions = validateCatalogue(cached.data);
+
+    catalogue = extensions;
+
+    const categories = new Set(
+        catalogue.map(item => item.category || "Other")
+    );
+
+    if (
+        selectedCategory !== "All" &&
+        !categories.has(selectedCategory)
+    ) {
+        selectedCategory = "All";
+    }
+
+    renderCategories();
+    await renderStoreCards();
+
+    return true;
 }
 
 async function loadStore(force = false) {
     if (storeLoading) return;
+
     storeLoading = true;
 
-    $("storeStatus").textContent = "Connecting to MistaX Store...";
+    const status = $("storeStatus");
+    const refreshButton = $("refreshStore");
+
+    if (force) {
+        selectedCategory = "All";
+    }
+
+    if (status) {
+        status.textContent = catalogue.length
+            ? "Checking for Store updates..."
+            : "Connecting to MistaX Store...";
+    }
+
+    if (refreshButton) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = "Refreshing...";
+    }
 
     try {
-        if (!force) {
-            const cached = await DB.getStore();
-            if (cached && cached.data) {
-                catalogue = validateCatalogue(cached.data);
-                renderCategories();
-                await renderStoreCards();
+        /*
+         * First show locally cached Store.
+         * Network request still runs after this.
+         */
+        if (!catalogue.length) {
+            try {
+                await loadCachedStore();
+            } catch (cacheError) {
+                console.warn(
+                    "MistaX cached Store error:",
+                    cacheError
+                );
             }
+        } else if (force) {
+            renderCategories();
+            await renderStoreCards();
         }
 
-        const response = await fetch(STORE_URL + "?_=" + Date.now(), {
-            cache: "no-store"
-        });
+        /*
+         * Fetch latest catalogue from GitHub sources.
+         */
+        const result = await fetchLatestCatalogue();
 
-        if (!response.ok) throw new Error("Store request failed: " + response.status);
+        const latestCatalogue = result.data;
 
-        const data = await response.json();
-        catalogue = validateCatalogue(data);
+        /*
+         * Do not overwrite cache with invalid/empty data.
+         */
+        if (
+            !latestCatalogue ||
+            !Array.isArray(latestCatalogue.extensions)
+        ) {
+            throw new Error("Invalid latest catalogue");
+        }
 
-        await DB.setStore({
-            ...data,
-            extensions: catalogue
-        });
+        /*
+         * Update memory only after successful validation.
+         */
+        catalogue = latestCatalogue.extensions;
 
-        await DB.setSetting("lastStoreSync", Date.now());
+        const categories = new Set(
+            catalogue.map(item => item.category || "Other")
+        );
 
-        $("storeStatus").textContent = "Store is up to date.";
+        if (
+            selectedCategory !== "All" &&
+            !categories.has(selectedCategory)
+        ) {
+            selectedCategory = "All";
+        }
+
+        /*
+         * Save only successfully validated catalogue.
+         */
+        await DB.setStore(latestCatalogue);
+
+        await DB.setSetting(
+            "lastStoreSync",
+            Date.now()
+        );
+
         renderCategories();
         await renderStoreCards();
-    } catch (error) {
-        console.error(error);
-        $("storeStatus").textContent = catalogue.length
-            ? "Showing cached Store. Could not refresh."
-            : "Unable to load Store. Check your connection.";
 
+        if (status) {
+            status.textContent =
+                "Store is up to date · " +
+                catalogue.length +
+                " extensions";
+        }
+
+        console.log(
+            "MistaX Store updated:",
+            catalogue.length,
+            "extensions"
+        );
+
+    } catch (error) {
+        console.error("MistaX Store error:", error);
+
+        /*
+         * If memory is empty, attempt cache one more time.
+         */
         if (!catalogue.length) {
-            const cached = await DB.getStore().catch(() => null);
-            if (cached && cached.data) {
-                catalogue = validateCatalogue(cached.data);
-                renderCategories();
-                await renderStoreCards();
+            try {
+                await loadCachedStore();
+            } catch (cacheError) {
+                console.error(
+                    "MistaX cache recovery failed:",
+                    cacheError
+                );
             }
         }
+
+        if (status) {
+            status.textContent = catalogue.length
+                ? "Showing saved Store · Update unavailable"
+                : "Unable to load Store. Check your connection.";
+        }
+
+        if (catalogue.length) {
+            renderCategories();
+            await renderStoreCards();
+        }
+
     } finally {
         storeLoading = false;
+
+        if (refreshButton) {
+            refreshButton.disabled = false;
+            refreshButton.innerHTML =
+                svg("refresh", 16) + " Refresh Store";
+        }
     }
 }
+
+/* =========================================
+   INSTALL / UPDATE
+========================================= */
 
 async function installExtension(item) {
     try {
         const old = await DB.get(item.id);
+
         if (old) {
             toast("Already installed");
             return;
         }
 
-        const response = await fetch(item.script, { cache: "no-store" });
-        if (!response.ok) throw new Error("Download failed");
+        const response = await fetch(item.script, {
+            cache: "no-store"
+        });
+
+        if (!response.ok) {
+            throw new Error("Download failed");
+        }
 
         const code = await response.text();
-        if (!code.trim()) throw new Error("Empty extension script");
+
+        if (!code.trim()) {
+            throw new Error("Empty extension script");
+        }
 
         const installed = {
             id: item.id,
@@ -744,22 +1081,29 @@ async function installExtension(item) {
             script: item.script
         };
 
-        await dbBatch(["extensions", "scriptCache"], tx => {
-            tx.objectStore("extensions").put(installed);
-            tx.objectStore("scriptCache").put({
-                id: item.id,
-                code,
-                version: item.version,
-                downloadedAt: Date.now(),
-                url: item.script
-            });
-        });
+        await dbBatch(
+            ["extensions", "scriptCache"],
+            tx => {
+                tx.objectStore("extensions").put(installed);
+
+                tx.objectStore("scriptCache").put({
+                    id: item.id,
+                    code,
+                    version: item.version,
+                    downloadedAt: Date.now(),
+                    url: item.script
+                });
+            }
+        );
 
         toast("Extension installed successfully");
+
         await renderStoreCards();
         await renderInstalled();
         await renderHome();
+
         updateDetailButton(item);
+
     } catch (error) {
         console.error(error);
         toast("Install failed: " + error.message);
@@ -769,13 +1113,24 @@ async function installExtension(item) {
 async function updateExtension(item) {
     try {
         const old = await DB.get(item.id);
-        if (!old) return installExtension(item);
 
-        const response = await fetch(item.script, { cache: "no-store" });
-        if (!response.ok) throw new Error("Download failed");
+        if (!old) {
+            return installExtension(item);
+        }
+
+        const response = await fetch(item.script, {
+            cache: "no-store"
+        });
+
+        if (!response.ok) {
+            throw new Error("Download failed");
+        }
 
         const code = await response.text();
-        if (!code.trim()) throw new Error("Empty script");
+
+        if (!code.trim()) {
+            throw new Error("Empty script");
+        }
 
         await stopExtension(item.id);
 
@@ -792,80 +1147,121 @@ async function updateExtension(item) {
             updatedAt: Date.now()
         };
 
-        await dbBatch(["extensions", "scriptCache"], tx => {
-            tx.objectStore("extensions").put(updated);
-            tx.objectStore("scriptCache").put({
-                id: item.id,
-                code,
-                version: item.version,
-                downloadedAt: Date.now(),
-                url: item.script
-            });
-        });
+        await dbBatch(
+            ["extensions", "scriptCache"],
+            tx => {
+                tx.objectStore("extensions").put(updated);
+
+                tx.objectStore("scriptCache").put({
+                    id: item.id,
+                    code,
+                    version: item.version,
+                    downloadedAt: Date.now(),
+                    url: item.script
+                });
+            }
+        );
 
         toast("Extension updated");
+
         await renderInstalled();
         await renderStoreCards();
+
         updateDetailButton(item);
+
     } catch (error) {
         toast("Update failed: " + error.message);
     }
 }
 
 async function uninstallExtension(id) {
-    if (settings.confirmDelete && !confirm("Uninstall this extension?")) return;
+    if (
+        settings.confirmDelete &&
+        !confirm("Uninstall this extension?")
+    ) {
+        return;
+    }
 
     await stopExtension(id);
 
-    await dbBatch(["extensions", "scriptCache"], tx => {
-        tx.objectStore("extensions").delete(id);
-        tx.objectStore("scriptCache").delete(id);
-    });
+    await dbBatch(
+        ["extensions", "scriptCache"],
+        tx => {
+            tx.objectStore("extensions").delete(id);
+            tx.objectStore("scriptCache").delete(id);
+        }
+    );
 
     toast("Extension uninstalled");
+
     await renderInstalled();
     await renderStoreCards();
     await renderHome();
 }
 
+/* =========================================
+   STORE UI
+========================================= */
+
 async function renderStore() {
     if (!catalogue.length) {
         await loadStore();
     } else {
+        renderCategories();
         await renderStoreCards();
     }
 }
 
 async function renderStoreCards() {
     const list = $("storeList");
+
     if (!list) return;
 
     const installed = await DB.all();
-    const query = $("storeSearch").value.trim().toLowerCase();
+
+    const searchInput = $("storeSearch");
+    const query = searchInput
+        ? searchInput.value.trim().toLowerCase()
+        : "";
 
     const filtered = catalogue.filter(item => {
-        const text = [item.name, item.description, item.category].join(" ").toLowerCase();
-        return text.includes(query) &&
-            (selectedCategory === "All" || item.category === selectedCategory);
+        const text = [
+            item.name,
+            item.description,
+            item.category,
+            item.id
+        ].join(" ").toLowerCase();
+
+        return (
+            text.includes(query) &&
+            (
+                selectedCategory === "All" ||
+                item.category === selectedCategory
+            )
+        );
     });
 
     list.innerHTML = "";
 
     if (!filtered.length) {
-        list.innerHTML = '<div class="empty">No extensions found.</div>';
+        list.innerHTML =
+            '<div class="empty">No extensions found.</div>';
         return;
     }
 
     filtered.forEach((item, index) => {
         const old = installed.find(x => x.id === item.id);
+
         const card = document.createElement("article");
         card.className = "card store-card";
-        card.style.animationDelay = Math.min(index * 35, 280) + "ms";
+        card.style.animationDelay =
+            Math.min(index * 35, 280) + "ms";
 
         const row = document.createElement("div");
         row.className = "extrow";
 
         const icon = makeIcon(item.icon);
+
         const info = document.createElement("div");
         info.className = "extinfo";
 
@@ -873,19 +1269,24 @@ async function renderStoreCards() {
         name.textContent = item.name;
 
         const meta = document.createElement("small");
-        meta.textContent = (item.category || "Other") + " · v" + item.version;
+        meta.textContent =
+            (item.category || "Other") +
+            " · v" +
+            item.version;
 
         info.append(name, meta);
         row.append(icon, info);
 
         const description = document.createElement("p");
         description.className = "description";
-        description.textContent = item.description || "No description available.";
+        description.textContent =
+            item.description || "No description available.";
 
         const verified = document.createElement("div");
         verified.className = "verified";
         verified.style.marginTop = "10px";
-        verified.innerHTML = svg("check", 13) + " MistaHub Reviewed";
+        verified.innerHTML =
+            svg("check", 13) + " MistaHub Reviewed";
 
         const actions = document.createElement("div");
         actions.className = "actions";
@@ -899,35 +1300,56 @@ async function renderStoreCards() {
         button.className = "btn";
 
         if (!old) {
-            button.textContent = "Install";
-            button.innerHTML = svg("download", 15) + " Install";
+            button.innerHTML =
+                svg("download", 15) + " Install";
+
             button.onclick = () => installExtension(item);
+
         } else if (old.version !== item.version) {
             button.textContent = "Update";
             button.onclick = () => updateExtension(item);
+
         } else {
             button.textContent = "Installed";
             button.disabled = true;
         }
 
         actions.append(details, button);
-        card.append(row, description, verified, actions);
+
+        card.append(
+            row,
+            description,
+            verified,
+            actions
+        );
+
         list.appendChild(card);
     });
 }
 
 function renderCategories() {
     const holder = $("categories");
+
     holder.innerHTML = "";
 
     const categories = [
         "All",
-        ...new Set(catalogue.map(item => item.category || "Other"))
+        ...new Set(
+            catalogue.map(item => item.category || "Other")
+        )
     ];
+
+    if (!categories.includes(selectedCategory)) {
+        selectedCategory = "All";
+    }
 
     categories.forEach(category => {
         const button = document.createElement("button");
-        button.className = "category" + (selectedCategory === category ? " active" : "");
+
+        button.className =
+            "category" +
+            (selectedCategory === category ? " active" : "");
+
         button.textContent = category;
 
         button.onclick = () => {
@@ -944,24 +1366,33 @@ function openDetails(item) {
     selectedExtension = item;
 
     const icon = $("detailIcon");
-    icon.innerHTML = "";
-
     const imageHolder = makeIcon(item.icon, "detail-icon");
+
     icon.replaceWith(imageHolder);
     imageHolder.id = "detailIcon";
 
-    $("detailCategory").textContent = item.category || "Other";
+    $("detailCategory").textContent =
+        item.category || "Other";
+
     $("detailTitle").textContent = item.name;
-    $("detailMeta").textContent = "Version " + item.version;
-    $("detailDescription").textContent = item.description || "No description available.";
+
+    $("detailMeta").textContent =
+        "Version " + item.version;
+
+    $("detailDescription").textContent =
+        item.description || "No description available.";
 
     updateDetailButton(item);
+
     $("detailOverlay").classList.add("show");
 }
 
 async function updateDetailButton(item) {
     const button = $("detailInstall");
-    if (!button || selectedExtension?.id !== item.id) return;
+
+    if (!button || selectedExtension?.id !== item.id) {
+        return;
+    }
 
     const old = await DB.get(item.id);
 
@@ -970,33 +1401,49 @@ async function updateDetailButton(item) {
     if (!old) {
         button.textContent = "Install Extension";
         button.onclick = () => installExtension(item);
+
     } else if (old.version !== item.version) {
         button.textContent = "Update Extension";
         button.onclick = () => updateExtension(item);
+
     } else {
         button.textContent = "Already Installed";
         button.disabled = true;
     }
 }
 
+/* =========================================
+   INSTALLED EXTENSIONS
+========================================= */
+
 async function renderInstalled() {
     const all = await DB.all();
-    const query = $("installedSearch").value.trim().toLowerCase();
+
+    const query = $("installedSearch").value
+        .trim()
+        .toLowerCase();
 
     const filtered = all.filter(item =>
-        (item.name + " " + item.description).toLowerCase().includes(query)
+        (item.name + " " + item.description)
+            .toLowerCase()
+            .includes(query)
     );
 
     const holder = $("installedList");
     holder.innerHTML = "";
 
     if (!filtered.length) {
-        holder.innerHTML = '<div class="empty"><div class="empty-icon">' + svg("extensions", 27) + '</div>No extensions installed yet.<br>Visit the Store to discover extensions.</div>';
+        holder.innerHTML =
+            '<div class="empty"><div class="empty-icon">' +
+            svg("extensions", 27) +
+            '</div>No extensions installed yet.<br>Visit the Store to discover extensions.</div>';
+
         return;
     }
 
     filtered.forEach(item => {
         const running = runtime.has(item.id);
+
         const card = document.createElement("div");
         card.className = "card";
 
@@ -1004,6 +1451,7 @@ async function renderInstalled() {
         row.className = "extrow";
 
         const icon = makeIcon(item.icon);
+
         const info = document.createElement("div");
         info.className = "extinfo";
 
@@ -1011,7 +1459,11 @@ async function renderInstalled() {
         name.textContent = item.name;
 
         const meta = document.createElement("small");
-        meta.textContent = "v" + item.version + " · " + (running ? "Running" : "Stopped");
+        meta.textContent =
+            "v" +
+            item.version +
+            " · " +
+            (running ? "Running" : "Stopped");
 
         info.append(name, meta);
 
@@ -1031,11 +1483,14 @@ async function renderInstalled() {
         const edit = document.createElement("button");
         edit.className = "btn secondary";
         edit.textContent = "Edit";
+
         edit.onclick = () => {
             $("editId").value = item.id;
             $("editName").value = item.name;
-            $("editDescription").value = item.description || "";
+            $("editDescription").value =
+                item.description || "";
             $("codeEditor").value = item.code;
+
             showPage("editor");
         };
 
@@ -1045,10 +1500,15 @@ async function renderInstalled() {
         remove.onclick = () => uninstallExtension(item.id);
 
         actions.append(edit, remove);
+
         card.append(row, description, actions);
         holder.appendChild(card);
     });
 }
+
+/* =========================================
+   HOME
+========================================= */
 
 async function renderHome() {
     const list = await DB.all();
@@ -1057,14 +1517,17 @@ async function renderHome() {
     $("runningCount").textContent = runtime.size;
 
     const recent = list.slice()
-        .sort((a, b) => (b.installedAt || 0) - (a.installedAt || 0))
+        .sort((a, b) =>
+            (b.installedAt || 0) - (a.installedAt || 0)
+        )
         .slice(0, 3);
 
     const holder = $("recentList");
     holder.innerHTML = "";
 
     if (!recent.length) {
-        holder.innerHTML = '<div class="empty">Your installed extensions will appear here.</div>';
+        holder.innerHTML =
+            '<div class="empty">Your installed extensions will appear here.</div>';
         return;
     }
 
@@ -1073,6 +1536,7 @@ async function renderHome() {
         card.className = "card extrow";
 
         const icon = makeIcon(item.icon);
+
         const info = document.createElement("div");
         info.className = "extinfo";
 
@@ -1084,9 +1548,14 @@ async function renderHome() {
 
         info.append(name, version);
         card.append(icon, info);
+
         holder.appendChild(card);
     });
 }
+
+/* =========================================
+   EDITOR
+========================================= */
 
 async function saveCustomExtension() {
     const id = $("editId").value.trim().toLowerCase();
@@ -1094,13 +1563,20 @@ async function saveCustomExtension() {
     const description = $("editDescription").value.trim();
     const code = $("codeEditor").value;
 
-    if (!/^[a-z0-9-]{2,60}$/.test(id)) return toast("Invalid extension ID");
-    if (!name || !code.trim()) return toast("Name and code are required");
+    if (!/^[a-z0-9-]{2,60}$/.test(id)) {
+        return toast("Invalid extension ID");
+    }
+
+    if (!name || !code.trim()) {
+        return toast("Name and code are required");
+    }
 
     const old = await DB.get(id);
 
     if (old && old.source === "store") {
-        return toast("Store extensions cannot be overwritten in Editor");
+        return toast(
+            "Store extensions cannot be overwritten in Editor"
+        );
     }
 
     await DB.save({
@@ -1118,39 +1594,60 @@ async function saveCustomExtension() {
     });
 
     toast("Extension saved");
+
     renderInstalled();
     renderHome();
 }
 
 async function testCustomExtension() {
     const code = $("codeEditor").value;
-    if (!code.trim()) return toast("Write code first");
+
+    if (!code.trim()) {
+        return toast("Write code first");
+    }
 
     const api = createExtensionAPI("editor-test");
 
     try {
-        let result = new Function("api", '"use strict";\n' + code)(api);
+        let result = new Function(
+            "api",
+            '"use strict";\n' + code
+        )(api);
 
         if (result && typeof result.then === "function") {
             result = await result;
         }
 
-        if (typeof result === "function") api.onCleanup(result);
+        if (typeof result === "function") {
+            api.onCleanup(result);
+        }
 
-        toast("Test executed. Cleaning temporary effects shortly.");
+        toast(
+            "Test executed. Cleaning temporary effects shortly."
+        );
+
         setTimeout(() => api.cleanup(), 1200);
+
     } catch (error) {
         api.cleanup();
         toast("Error: " + error.message);
     }
 }
 
+/* =========================================
+   SETTINGS
+========================================= */
+
 function setSwitch(id, value) {
     $(id).classList.toggle("on", !!value);
 }
 
 async function renderSettings() {
-    setSwitch("themeSwitch", settings.theme === "dark");
+    setSwitch(
+        "themeSwitch",
+        settings.theme === "dark"
+    );
+
     setSwitch("bubbleSwitch", settings.bubble);
     setSwitch("autoSwitch", settings.autoRun);
     setSwitch("confirmSwitch", settings.confirmDelete);
@@ -1160,10 +1657,21 @@ async function renderSettings() {
     $("bubbleOpacity").value = settings.bubbleOpacity;
 
     const list = await DB.all();
-    const bytes = new Blob(list.map(item => item.code || "")).size;
+
+    const bytes = new Blob(
+        list.map(item => item.code || "")
+    ).size;
+
     $("storageInfo").textContent =
-        list.length + " extensions · " + (bytes / 1024).toFixed(1) + " KB of script data";
+        list.length +
+        " extensions · " +
+        (bytes / 1024).toFixed(1) +
+        " KB of script data";
 }
+
+/* =========================================
+   BACKUP
+========================================= */
 
 async function exportBackup() {
     const extensions = await DB.all();
@@ -1176,17 +1684,20 @@ async function exportBackup() {
         settings
     };
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-        type: "application/json"
-    });
+    const blob = new Blob(
+        [JSON.stringify(data, null, 2)],
+        { type: "application/json" }
+    );
 
     const url = URL.createObjectURL(blob);
+
     const link = document.createElement("a");
     link.href = url;
     link.download = "mistax-backup.json";
     link.click();
 
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+
     toast("Backup exported");
 }
 
@@ -1205,35 +1716,51 @@ async function importBackup(file) {
             typeof item.code === "string"
         );
 
-        await dbBatch(["extensions"], tx => {
-            records.forEach(item => {
-                tx.objectStore("extensions").put({
-                    ...item,
-                    source: item.source || "custom",
-                    enabled: false
+        await dbBatch(
+            ["extensions"],
+            tx => {
+                records.forEach(item => {
+                    tx.objectStore("extensions").put({
+                        ...item,
+                        source: item.source || "custom",
+                        enabled: false
+                    });
                 });
-            });
-        });
+            }
+        );
 
-        if (data.settings && typeof data.settings === "object") {
+        if (
+            data.settings &&
+            typeof data.settings === "object"
+        ) {
             for (const key of Object.keys(DEFAULT_SETTINGS)) {
                 if (key in data.settings) {
-                    await saveSetting(key, data.settings[key]);
+                    await saveSetting(
+                        key,
+                        data.settings[key]
+                    );
                 }
             }
         }
 
         toast("Backup imported");
+
         renderInstalled();
         renderHome();
         renderSettings();
+
     } catch (error) {
         toast("Import failed: " + error.message);
     }
 }
 
+/* =========================================
+   FLOATING BUBBLE
+========================================= */
+
 function makeBubbleDraggable() {
     const bubble = $("bubble");
+
     let startX = 0;
     let startY = 0;
     let originX = 0;
@@ -1245,24 +1772,44 @@ function makeBubbleDraggable() {
         startY = event.clientY;
 
         const rect = bubble.getBoundingClientRect();
+
         originX = rect.left;
         originY = rect.top;
+
         moved = false;
 
         bubble.setPointerCapture(event.pointerId);
     });
 
     bubble.addEventListener("pointermove", event => {
-        if (!bubble.hasPointerCapture(event.pointerId)) return;
+        if (!bubble.hasPointerCapture(event.pointerId)) {
+            return;
+        }
 
         const dx = event.clientX - startX;
         const dy = event.clientY - startY;
 
-        if (Math.abs(dx) + Math.abs(dy) > 7) moved = true;
+        if (Math.abs(dx) + Math.abs(dy) > 7) {
+            moved = true;
+        }
+
         if (!moved) return;
 
-        const x = Math.max(0, Math.min(innerWidth - settings.bubbleSize, originX + dx));
-        const y = Math.max(0, Math.min(innerHeight - settings.bubbleSize, originY + dy));
+        const x = Math.max(
+            0,
+            Math.min(
+                innerWidth - settings.bubbleSize,
+                originX + dx
+            )
+        );
+
+        const y = Math.max(
+            0,
+            Math.min(
+                innerHeight - settings.bubbleSize,
+                originY + dy
+            )
+        );
 
         bubble.style.left = x + "px";
         bubble.style.top = y + "px";
@@ -1274,6 +1821,7 @@ function makeBubbleDraggable() {
         if (!moved) return;
 
         const rect = bubble.getBoundingClientRect();
+
         await saveSetting("bubblePosition", {
             left: rect.left + "px",
             top: rect.top + "px"
@@ -1288,29 +1836,55 @@ function makeBubbleDraggable() {
     }, true);
 }
 
+/* =========================================
+   AUTO RUN
+========================================= */
+
 async function runEnabledExtensions() {
     if (!settings.autoRun) return;
 
     const list = await DB.all();
 
     for (const item of list) {
-        if (item.enabled) await executeExtension(item);
+        if (item.enabled) {
+            await executeExtension(item);
+        }
     }
 }
+
+/* =========================================
+   EVENTS
+========================================= */
 
 function bindEvents() {
     bindNavigation();
 
-    $("bubble").onclick = () => $("app").classList.toggle("show");
-    $("close").onclick = () => $("app").classList.remove("show");
-    $("minimize").onclick = () => $("app").classList.remove("show");
+    $("bubble").onclick = () => {
+        $("app").classList.toggle("show");
+    };
 
-    $("detailBack").onclick = () => $("detailOverlay").classList.remove("show");
-    $("detailClose").onclick = () => $("detailOverlay").classList.remove("show");
+    $("close").onclick = () => {
+        $("app").classList.remove("show");
+    };
+
+    $("minimize").onclick = () => {
+        $("app").classList.remove("show");
+    };
+
+    $("detailBack").onclick = () => {
+        $("detailOverlay").classList.remove("show");
+    };
+
+    $("detailClose").onclick = () => {
+        $("detailOverlay").classList.remove("show");
+    };
 
     $("storeSearch").oninput = renderStoreCards;
     $("installedSearch").oninput = renderInstalled;
-    $("refreshStore").onclick = () => loadStore(true);
+
+    $("refreshStore").onclick = () => {
+        loadStore(true);
+    };
 
     $("saveCode").onclick = saveCustomExtension;
     $("testCode").onclick = testCustomExtension;
@@ -1325,7 +1899,11 @@ function bindEvents() {
     };
 
     $("themeSwitch").onclick = async () => {
-        await saveSetting("theme", settings.theme === "dark" ? "light" : "dark");
+        await saveSetting(
+            "theme",
+            settings.theme === "dark" ? "light" : "dark"
+        );
+
         renderSettings();
     };
 
@@ -1339,11 +1917,17 @@ function bindEvents() {
     };
 
     $("bubbleSize").oninput = event => {
-        saveSetting("bubbleSize", Number(event.target.value));
+        saveSetting(
+            "bubbleSize",
+            Number(event.target.value)
+        );
     };
 
     $("bubbleOpacity").oninput = event => {
-        saveSetting("bubbleOpacity", Number(event.target.value));
+        saveSetting(
+            "bubbleOpacity",
+            Number(event.target.value)
+        );
     };
 
     $("resetBubble").onclick = async () => {
@@ -1363,44 +1947,71 @@ function bindEvents() {
     };
 
     $("confirmSwitch").onclick = async () => {
-        await saveSetting("confirmDelete", !settings.confirmDelete);
+        await saveSetting(
+            "confirmDelete",
+            !settings.confirmDelete
+        );
+
         renderSettings();
     };
 
     $("exportBackup").onclick = exportBackup;
 
-    $("importBackup").onclick = () => $("backupFile").click();
+    $("importBackup").onclick = () => {
+        $("backupFile").click();
+    };
 
     $("backupFile").onchange = event => {
         const file = event.target.files[0];
-        if (file) importBackup(file);
+
+        if (file) {
+            importBackup(file);
+        }
+
         event.target.value = "";
     };
 
     $("factoryReset").onclick = async () => {
-        if (!confirm("Factory Reset will permanently delete all extensions, settings and caches. Continue?")) return;
+        if (
+            !confirm(
+                "Factory Reset will permanently delete all extensions, settings and caches. Continue?"
+            )
+        ) {
+            return;
+        }
 
         for (const id of [...runtime.keys()]) {
             await stopExtension(id);
         }
 
         await DB.reset();
+
         settings = { ...DEFAULT_SETTINGS };
+        catalogue = [];
+        selectedCategory = "All";
 
         applySettings();
+
         renderSettings();
         renderInstalled();
         renderHome();
+
         toast("Factory Reset completed");
     };
 }
 
+/* =========================================
+   INITIALIZATION
+========================================= */
+
 async function init() {
     try {
         await openDatabase();
+
         await loadSettings();
 
         applySettings();
+
         bindEvents();
         makeBubbleDraggable();
 
@@ -1409,12 +2020,23 @@ async function init() {
         renderInstalled();
 
         await loadStore();
+
         await runEnabledExtensions();
 
-        console.log("MistaX V" + VERSION + " initialized");
+        console.log(
+            "MistaX V" + VERSION + " initialized"
+        );
+
     } catch (error) {
-        console.error("MistaX initialization error:", error);
-        toast("MistaX initialization failed: " + error.message);
+        console.error(
+            "MistaX initialization error:",
+            error
+        );
+
+        toast(
+            "MistaX initialization failed: " +
+            error.message
+        );
     }
 }
 
