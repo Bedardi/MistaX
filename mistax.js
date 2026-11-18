@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 
-const VERSION = "4.1.0";
+const VERSION = "4.1.1";
 const DB_NAME = "MistaXStore";
 const DB_VERSION = 4;
 
