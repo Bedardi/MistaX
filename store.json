@@ -12,6 +12,15 @@
       "icon": "https://mistahub.in/assets/extensions/dark-mode.png",
       "script": "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/extensions/dark-mode/main.js"
     },
+{
+  "id": "view-source",
+  "name": "MistaX View Source",
+  "description": "Inspect original HTML source and live DOM with syntax highlighting, search, formatting and download.",
+  "version": "1.0.0",
+  "category": "Developer Tools",
+  "icon": "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/assets/icons/view-source.png",
+  "script": "https://cdn.jsdelivr.net/gh/Bedardi/MistaX@main/extensions/view-source/main.js"
+},
     {
       "id": "page-information",
       "name": "Page Information",
