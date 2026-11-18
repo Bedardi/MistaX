@@ -287,10 +287,12 @@ All rights reserved by MistaHub unless otherwise specified.
 You may use MistaX for personal purposes. Redistribution, modification, or commercial distribution of the official project and its branding requires permission from MistaHub.
 
 ---
+---
 
 <p align="center">
   <strong>MistaX — Extend Your Web Experience.</strong>
   <br>
   Developed with ❤️ by MistaHub
 </p>
-```
+
+---
